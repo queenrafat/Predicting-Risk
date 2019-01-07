@@ -1,0 +1,268 @@
+---
+title: "predicting a customer's risk of paying a loan"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+loading my libraries
+```{r}
+library(data.table)
+library(tictoc)
+library(tidyverse)
+library(lubridate)
+library(beepr)
+library(tree)
+library(MASS)
+library(pastecs)
+library(Hmisc)
+library(dplyr)
+```
+
+setting my working directory
+```{r}
+getwd()
+
+setwd("C:/Users/queen/Documents/data/project")
+
+getwd()
+```
+
+
+loading the test data tables into r
+```{r}
+trial_data<-fread("C:/Users/queen/Documents/data/project/train_data.csv")
+
+```
+
+still examinig my data
+```{r}
+require(Hmisc)
+#describe(trial_data)
+```
+
+still on univariate analysis
+```{r}
+pastecs::stat.desc(trial_data)
+```
+
+dealing with NA:
+for this data set i will be treating missing data as o or i will be using it's next neighbors to decide what to fill in. i may also use the mean depending on what the variable is
+
+
+```{r}
+proj<-trial_data
+anyNA(proj)
+proj<-proj[, -(117:122)]
+```
+getting rid of nas
+```{r}
+proj<-proj[,-(88:92)]
+proj<-proj[,-c(12, 22, 29, 43:90)]
+proj$EXT_SOURCE_1<-NULL
+proj$AMT_GOODS_PRICE<-impute(proj$AMT_GOODS_PRICE, mean)
+proj$AMT_ANNUITY<-impute(proj$AMT_ANNUITY, mean)
+proj$CNT_FAM_MEMBERS<-impute(proj$CNT_FAM_MEMBERS, mode)
+proj$DAYS_LAST_PHONE_CHANGE<-impute(proj$DAYS_LAST_PHONE_CHANGE, median)
+
+```
+
+```{r}
+require(mice)
+```
+
+using the mice function to impute NAS
+
+```{r}
+proj1<-mice(proj)
+```
+
+```{r}
+proj2<-complete(proj1, 1)
+```
+
+
+
+still reducing my data
+```{r}
+proj3<-proj[,-(40:58)]
+
+```
+
+```{r}
+proj4<-proj3[,-c(1, 30:31)]
+#describe(proj4)
+```
+
+transforming my data
+```{r}
+proj5<-mutate(proj4, DAYS_BIRTH = -DAYS_BIRTH/365, DAYS_EMPLOYED = (-1*DAYS_EMPLOYED/365), DAYS_ID_PUBLISH = (-1*DAYS_EMPLOYED/365), DAYS_LAST_PHONE_CHANGE = (-1*DAYS_LAST_PHONE_CHANGE/365), DAYS_REGISTRATION = (-1*DAYS_REGISTRATION/365))
+```
+
+getting rid of outliers
+```{r}
+which(proj5$CODE_GENDER=="XNA")
+
+```
+
+```{r}
+proj5<-proj5[-c( 35658,  38567,  83383, 189641), ]
+```
+
+
+```{r}
+TARGET0<-factor(proj5$TARGET, levels = c(1, 0))
+proj5<-proj5[, -38]
+proj5<-data.frame(proj5, TARGET0)
+```
+
+for logistic
+
+```{r}
+proj5<-proj5[, -1]
+table(proj5$TARGET0)
+```
+
+```{r}
+library(caret)
+library(broom)
+library(e1071)
+library(InformationValue)
+library(rpart)
+library(rpart.plot)
+```
+
+creating my train and test data
+```{r}
+'%ni%'<- Negate('%in%') #define not 'in function'
+
+options(scipen = 999) #prevents printing cientific notation
+
+#prep train and test data
+set.seed(100)
+traindata_index<-createDataPartition(proj5$TARGET0, p=0.7, list = F)
+trainData<-proj5[traindata_index, ]
+testData<-proj5[-traindata_index, ]
+
+
+
+```
+
+
+```{r}
+#downsampling
+set.seed(100)
+down_train<-downSample(x=trainData[, colnames(trainData) %ni% 'TARGET0'], y=trainData$TARGET0)
+
+#upsampling
+up_train<-upSample(x=trainData[, colnames(trainData) %ni% 'TARGET0'], y=trainData$TARGET0)
+
+```
+
+
+```{r}
+table(down_train$Class)
+
+table(up_train$Class)
+```
+
+trying different logistic models
+```{r}
+logitmod1<-glm(Class~ NAME_CONTRACT_TYPE+CODE_GENDER+ CNT_CHILDREN+ NAME_EDUCATION_TYPE+ NAME_HOUSING_TYPE+ REGION_POPULATION_RELATIVE+ DAYS_BIRTH+ DAYS_EMPLOYED+ FLAG_PHONE+ REGION_RATING_CLIENT_W_CITY+ LIVE_REGION_NOT_WORK_REGION+ ORGANIZATION_TYPE, family = binomial, data = down_train)
+
+logitmod2<-glm(Class~ NAME_CONTRACT_TYPE+CODE_GENDER+ CNT_CHILDREN+ NAME_EDUCATION_TYPE+ NAME_HOUSING_TYPE+ REGION_POPULATION_RELATIVE+ DAYS_BIRTH+ DAYS_EMPLOYED+ FLAG_PHONE+ REGION_RATING_CLIENT_W_CITY+ LIVE_REGION_NOT_WORK_REGION+ ORGANIZATION_TYPE, family = binomial, data = up_train)
+
+logitmod3<-glm(Class~ NAME_CONTRACT_TYPE+CODE_GENDER+ CNT_CHILDREN+FLAG_OWN_CAR+ NAME_EDUCATION_TYPE+ NAME_HOUSING_TYPE+ REGION_POPULATION_RELATIVE+ DAYS_BIRTH+ DAYS_EMPLOYED+ FLAG_PHONE+AMT_INCOME_TOTAL+ REGION_RATING_CLIENT_W_CITY+ LIVE_REGION_NOT_WORK_REGION+ ORGANIZATION_TYPE, family = binomial, data = down_train)
+
+
+
+```
+
+```{r}
+lmmod_df<-tidy(logitmod1)
+lmod_df1<-tidy(logitmod1)
+lmod_df2<-(logitmod2)
+lmmod_df
+lmod_df1
+lmod_df2
+```
+
+
+```{r}
+
+testData0<-mutate(testData, Class=TARGET0 )
+testData0<-testData0[,-37]
+```
+
+comparing the prediction power of my models
+```{r}
+pred<-predict(logitmod1, newdata = testData0, type = 'response')
+Y_pred_num<-ifelse(pred >0.5, 1, 0)
+Y_pred<-factor(Y_pred_num, levels = c(0,1))
+y_act=testData0$Class
+```
+
+```{r}
+mean(Y_pred==y_act)
+```
+
+```{r}
+pred<-predict(logitmod2, newdata = testData0, type = 'response')
+Y_pred_num<-ifelse(pred >0.5, 1, 0)
+Y_pred<-factor(Y_pred_num, levels = c(0,1))
+y_act=testData0$Class
+```
+
+```{r}
+mean(Y_pred==y_act)
+```
+
+```{r}
+pred<-predict(logitmod3, newdata = testData0, type = 'response')
+Y_pred_num<-ifelse(pred >0.5, 1, 0)
+Y_pred<-factor(Y_pred_num, levels = c(0,1))
+y_act=testData0$Class
+```
+
+
+```{r}
+mean(Y_pred==y_act)
+```
+of the three models, logitmod has the highiest predictive power.
+
+
+```{r}
+# confusion matrix
+caret::confusionMatrix(Y_pred, y_act, positive= "1")
+```
+
+roc curve
+ greater the area the better
+```{r}
+InformationValue::plotROC(y_act, pred)
+InformationValue::AUROC(y_act, pred)
+```
+
+
+```{r}
+rm('proj', 'proj1')
+```
+
+building decision trees
+using rpart 
+```{r}
+rpart_proj<-rpart(Class~. ,data =  down_train)
+rpart_proj
+```
+
+
+```{r}
+rpart.plot(rpart_proj)
+```
+
+from the above plot, we can see that industry type, days of employment, age, amount and education are important in predicting a customer's risk of defaulting
+
+
+
+
